@@ -29,14 +29,12 @@ Generate a summary for this conversation:`
 )
 
 type sessionCompactor struct {
-	model        provider.Provider
-	sessionStore session.Store
+	model provider.Provider
 }
 
-func newSessionCompactor(model provider.Provider, sessionStore session.Store) *sessionCompactor {
+func newSessionCompactor(model provider.Provider, _ session.Store) *sessionCompactor {
 	return &sessionCompactor{
-		model:        model,
-		sessionStore: sessionStore,
+		model: model,
 	}
 }
 
@@ -63,7 +61,9 @@ func (c *sessionCompactor) Compact(ctx context.Context, sess *session.Session, a
 	}
 
 	sess.Messages = append(sess.Messages, session.Item{Summary: summary})
-	_ = c.sessionStore.UpdateSession(ctx, sess)
+
+	// Emit event for persistence (instead of direct store call)
+	events <- SummaryAdded(sess.ID, summary, agentName)
 
 	slog.Debug("Generated session summary", "session_id", sess.ID, "summary_length", len(summary))
 	events <- SessionSummary(sess.ID, summary, agentName)

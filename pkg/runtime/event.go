@@ -526,3 +526,63 @@ func HookBlocked(toolCall tools.ToolCall, toolDefinition tools.Tool, message, ag
 		AgentContext:   AgentContext{AgentName: agentName},
 	}
 }
+
+// MessageAddedEvent is emitted when a message is added to the session.
+// This event is used by the PersistentRuntime wrapper to persist messages.
+type MessageAddedEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Message   any    `json:"message"` // *session.Message
+	AgentContext
+}
+
+func (e *MessageAddedEvent) GetAgentName() string { return e.AgentName }
+
+func MessageAdded(sessionID string, msg any, agentName string) Event {
+	return &MessageAddedEvent{
+		Type:         "message_added",
+		SessionID:    sessionID,
+		Message:      msg,
+		AgentContext: AgentContext{AgentName: agentName},
+	}
+}
+
+// SubSessionCompletedEvent is emitted when a sub-session completes and is added to parent.
+// This event is used by the PersistentRuntime wrapper to persist sub-sessions.
+type SubSessionCompletedEvent struct {
+	Type            string `json:"type"`
+	ParentSessionID string `json:"parent_session_id"`
+	SubSession      any    `json:"sub_session"` // *session.Session
+	AgentContext
+}
+
+func (e *SubSessionCompletedEvent) GetAgentName() string { return e.AgentName }
+
+func SubSessionCompleted(parentSessionID string, subSession any, agentName string) Event {
+	return &SubSessionCompletedEvent{
+		Type:            "sub_session_completed",
+		ParentSessionID: parentSessionID,
+		SubSession:      subSession,
+		AgentContext:    AgentContext{AgentName: agentName},
+	}
+}
+
+// SummaryAddedEvent is emitted when a summary is added to the session.
+// This event is used by the PersistentRuntime wrapper to persist summaries.
+type SummaryAddedEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Summary   string `json:"summary"`
+	AgentContext
+}
+
+func (e *SummaryAddedEvent) GetAgentName() string { return e.AgentName }
+
+func SummaryAdded(sessionID, summary, agentName string) Event {
+	return &SummaryAddedEvent{
+		Type:         "summary_added",
+		SessionID:    sessionID,
+		Summary:      summary,
+		AgentContext: AgentContext{AgentName: agentName},
+	}
+}

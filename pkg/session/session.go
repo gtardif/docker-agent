@@ -249,6 +249,16 @@ func (s *Session) GetLastUserMessageContent() string {
 	return s.getLastMessageContentByRole(chat.MessageRoleUser)
 }
 
+// GetLastUserMessage returns the last user message in the session, or nil if none exists.
+func (s *Session) GetLastUserMessage() *Message {
+	for i := len(s.Messages) - 1; i >= 0; i-- {
+		if s.Messages[i].IsMessage() && s.Messages[i].Message.Message.Role == chat.MessageRoleUser {
+			return s.Messages[i].Message
+		}
+	}
+	return nil
+}
+
 func (s *Session) getLastMessageContentByRole(role chat.MessageRole) string {
 	messages := s.GetAllMessages()
 	for i := len(messages) - 1; i >= 0; i-- {
