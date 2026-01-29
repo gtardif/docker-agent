@@ -13,6 +13,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/docker/cli/cli-plugins/metadata"
+	"github.com/docker/cli/cli-plugins/plugin"
+	"github.com/docker/cli/cli/command"
+
 	"github.com/docker/cagent/pkg/environment"
 	"github.com/docker/cagent/pkg/feedback"
 	"github.com/docker/cagent/pkg/logging"
@@ -105,7 +109,19 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddGroup(&cobra.Group{ID: "advanced", Title: "Advanced Commands:"})
 	cmd.AddGroup(&cobra.Group{ID: "server", Title: "Server Commands:"})
 
+	if isCliPLugin() {
+		cmd.Use = "agent"
+		cmd.Short = "agent"
+		cmd.Long = "run AI agents"
+		cmd.Example = `  docker agent run ./agent.yaml
+  docker agent run agentcatalog/pirate`
+	}
+
 	return cmd
+}
+
+func isCliPLugin() bool {
+	return len(os.Args) >= 0 && strings.HasSuffix(os.Args[0], "docker-agent")
 }
 
 func Execute(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
@@ -113,6 +129,7 @@ func Execute(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, arg
 	telemetry.SetGlobalTelemetryVersion(version.Version)
 
 	// Print startup message only on first installation/setup
+	// TODO: check if we want this with cli plugin
 	if isFirstRun() && os.Getenv("CAGENT_HIDE_TELEMETRY_BANNER") != "1" {
 		welcomeMsg := fmt.Sprintf(`
 Welcome to cagent! 🚀
@@ -139,35 +156,61 @@ We collect anonymous usage data to help improve cagent. To disable:
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)
 
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		envErr := &environment.RequiredEnvError{}
-		runtimeErr := RuntimeError{}
-
-		switch {
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case errors.As(err, &envErr):
-			fmt.Fprintln(stderr, "The following environment variables must be set:")
-			for _, v := range envErr.Missing {
-				fmt.Fprintf(stderr, " - %s\n", v)
+	if isCliPLugin() {
+		plugin.Run(func(dockerCli command.Cli) *cobra.Command {
+			originalPreRun := rootCmd.PersistentPreRunE
+			rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+				if err := plugin.PersistentPreRunE(cmd, args); err != nil {
+					return err
+				}
+				if originalPreRun != nil {
+					if err := originalPreRun(cmd, args); err != nil {
+						return processErr(ctx, err, stderr, rootCmd)
+					}
+				}
+				return nil
 			}
-			fmt.Fprintln(stderr, "\nEither:\n - Set those environment variables before running cagent\n - Run cagent with --env-from-file\n - Store those secrets using one of the built-in environment variable providers.")
-		case errors.As(err, &runtimeErr):
-			// Runtime errors have already been printed by the command itself
-			// Don't print them again or show usage
-		default:
-			// Command line usage errors - show the error and usage
-			fmt.Fprintln(stderr, err)
-			fmt.Fprintln(stderr)
-			if strings.HasPrefix(err.Error(), "unknown command ") || strings.HasPrefix(err.Error(), "accepts ") {
-				_ = rootCmd.Usage()
-			}
+			return rootCmd
+		}, metadata.Metadata{
+			SchemaVersion: "0.1.0",
+			Vendor:        "Docker Inc.",
+			Version:       version.Version,
+		})
+	} else {
+		err := rootCmd.ExecuteContext(ctx)
+		if err != nil {
+			return processErr(ctx, err, stderr, rootCmd)
 		}
+	}
+	return nil
+}
 
-		return err
+func processErr(ctx context.Context, err error, stderr io.Writer, rootCmd *cobra.Command) error {
+	envErr := &environment.RequiredEnvError{}
+	runtimeErr := RuntimeError{}
+
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.As(err, &envErr):
+		fmt.Fprintln(stderr, "The following environment variables must be set:")
+		for _, v := range envErr.Missing {
+			fmt.Fprintf(stderr, " - %s\n", v)
+		}
+		fmt.Fprintln(stderr, "\nEither:\n - Set those environment variables before running cagent\n - Run cagent with --env-from-file\n - Store those secrets using one of the built-in environment variable providers.")
+	case errors.As(err, &runtimeErr):
+		// Runtime errors have already been printed by the command itself
+		// Don't print them again or show usage
+	default:
+		// Command line usage errors - show the error and usage
+		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr)
+		if strings.HasPrefix(err.Error(), "unknown command ") || strings.HasPrefix(err.Error(), "accepts ") {
+			_ = rootCmd.Usage()
+		}
 	}
 
-	return nil
+	return err
 }
 
 // setupLogging configures slog logging behavior.

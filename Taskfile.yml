@@ -34,6 +34,12 @@ tasks:
     generates:
       - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
 
+  deploy-local:
+    desc: Deploy the docker agent cli-plugin
+    deps: ["build"]
+    cmds:
+      - cp ./bin/cagent ~/.docker/cli-plugins/docker-agent
+
   lint:
     desc: Run golangci-lint
     cmds:
