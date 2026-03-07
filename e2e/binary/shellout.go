@@ -24,6 +24,10 @@ func Exec(cmd string, args ...string) (CmdResult, error) {
 	return ExecWithContextInDir(context.Background(), "", cmd, args, nil)
 }
 
+func ExecWithEnv(env []string, cmd string, args ...string) (CmdResult, error) {
+	return ExecWithContextInDir(context.Background(), "", cmd, args, env)
+}
+
 func ExecWithContextAndEnv(ctx context.Context, env []string, cmd string, args ...string) (CmdResult, error) {
 	return ExecWithContextInDir(ctx, "", cmd, args, env)
 }
