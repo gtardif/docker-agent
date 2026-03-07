@@ -4,6 +4,7 @@
 package binary
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -52,4 +53,49 @@ func TestExecMissingKeys(t *testing.T) {
 		require.Contains(t, res.Stderr, "environment variables must be set")
 		require.Contains(t, res.Stderr, "OPENAI_API_KEY")
 	})
+}
+func TestAutoComplete(t *testing.T) {
+	t.Run("cli plugin auto-complete cagent", func(t *testing.T) {
+		res, err := Exec(binDir+"/cagent", "__complete", "ser")
+		require.NoError(t, err)
+		props := lines(res.Stdout)
+		require.Contains(t, props[0], "serve")
+	})
+
+	t.Run("cli plugin auto-complete docker-agent", func(t *testing.T) {
+		res, err := Exec(binDir+"/docker-agent", "__complete", "ser")
+		require.NoError(t, err)
+		props := lines(res.Stdout)
+		require.Contains(t, props[0], "serve")
+	})
+
+	t.Run("cli plugin auto-complete docker-agent sub commands", func(t *testing.T) {
+		res, err := Exec(binDir+"/docker-agent", "__complete", "serve", "")
+		require.NoError(t, err)
+		props := lines(res.Stdout)
+		require.Contains(t, props[0], "a2a")
+		require.Contains(t, props[0], "Start an agent as an A2A")
+		require.Contains(t, props[1], "acp")
+		require.Contains(t, props[2], "api")
+		require.Contains(t, props[3], "mcp")
+	})
+
+	t.Run("cli plugin auto-complete docker agent", func(t *testing.T) {
+		res, err := ExecWithEnv([]string{"DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND=/docker-agent"}, binDir+"/docker-agent", "__complete", "agent", "ser")
+		require.NoError(t, err)
+		props := lines(res.Stdout)
+		require.Contains(t, props[0], "serve")
+	})
+
+	t.Run("cli plugin auto-complete docker agent sub commands", func(t *testing.T) {
+		res, err := ExecWithEnv([]string{"DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND=/docker-agent"}, binDir+"/docker-agent", "__complete", "agent", "serve", "")
+		require.NoError(t, err)
+		props := lines(res.Stdout)
+		require.Contains(t, props[0], "a2a")
+		require.Contains(t, props[1], "acp")
+	})
+}
+
+func lines(s string) []string {
+	return strings.Split(s, "\n")
 }

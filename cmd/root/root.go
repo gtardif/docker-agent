@@ -43,6 +43,10 @@ func isDockerAgent() bool {
 	return len(os.Args) > 0 && strings.HasSuffix(os.Args[0], cliPluginBinary)
 }
 
+func isAutoCompleteCmd() bool {
+	return len(os.Args) > 1 && (os.Args[1] == "__complete" || os.Args[1] == "__completeNoDesc")
+}
+
 func NewRootCmd() *cobra.Command {
 	var flags rootFlags
 
@@ -189,9 +193,11 @@ We collect anonymous usage data to help improve docker agent. To disable:
 		return nil
 	}
 
-	// When no subcommand is given, default to "run".
-	rootCmd.SetArgs(append(args[0:1], defaultToRun(rootCmd, args[1:])...))
-	os.Args = append(os.Args[0:2], defaultToRun(rootCmd, os.Args[2:])...)
+	if !isAutoCompleteCmd() {
+		// When no subcommand is given, default to "run".
+		rootCmd.SetArgs(append(args[0:1], defaultToRun(rootCmd, args[1:])...))
+		os.Args = append(os.Args[0:2], defaultToRun(rootCmd, os.Args[2:])...)
+	}
 
 	plugin.Run(func(dockerCli command.Cli) *cobra.Command {
 		originalPreRun := rootCmd.PersistentPreRunE
