@@ -55,12 +55,47 @@ func walkSchema(schema map[string]any, fn func(map[string]any)) {
 // makeAllRequired makes all object properties "required" throughout the schema,
 // because that's what the OpenAI Response API demands.
 // Properties that were not originally required are made nullable.
+// Also ensures all object-type schemas have additionalProperties: false.
 func makeAllRequired(schema shared.FunctionParameters) shared.FunctionParameters {
 	if schema == nil {
 		schema = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 
 	walkSchema(schema, func(node map[string]any) {
+		// Check if this node is an object type (either "object" or ["object", ...])
+		isObject := false
+		if typeVal, ok := node["type"]; ok {
+			switch t := typeVal.(type) {
+			case string:
+				isObject = t == "object"
+			case []any:
+				for _, v := range t {
+					if s, ok := v.(string); ok && s == "object" {
+						isObject = true
+						break
+					}
+				}
+			case []string:
+				for _, s := range t {
+					if s == "object" {
+						isObject = true
+						break
+					}
+				}
+			}
+		}
+
+		// All object types must have additionalProperties: false for OpenAI Responses API strict mode
+		// But only set it if additionalProperties is not already defined as an object schema
+		if isObject {
+			if addProps, exists := node["additionalProperties"]; !exists || addProps == nil || addProps == true {
+				node["additionalProperties"] = false
+			}
+			// If additionalProperties is already set to false or is an object schema (map[string]any),
+			// leave it as is - the object schema case will be walked separately
+		}
+
+		// If the node has explicit properties, make them all required
 		properties, ok := node["properties"].(map[string]any)
 		if !ok {
 			return
@@ -88,7 +123,6 @@ func makeAllRequired(schema shared.FunctionParameters) shared.FunctionParameters
 		}
 
 		node["required"] = newRequired
-		node["additionalProperties"] = false
 	})
 
 	return schema

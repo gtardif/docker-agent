@@ -333,6 +333,45 @@ func TestRemoveFormatFields_NoProperties(t *testing.T) {
 	assert.Equal(t, schema, updated)
 }
 
+func TestMakeAllRequired_TypeArrayWithObject(t *testing.T) {
+	// Reproduces the user_prompt tool schema where a property has
+	// type: ["object", "null"] with nested properties. OpenAI requires
+	// these nested properties to also have additionalProperties: false.
+	schema := shared.FunctionParameters{
+		"type": "object",
+		"properties": map[string]any{
+			"schema": map[string]any{
+				"type": []string{"object", "null"},
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+					"age":  map[string]any{"type": "number"},
+				},
+				"required": []any{"name"},
+			},
+		},
+		"required": []any{"schema"},
+	}
+
+	updated := makeAllRequired(schema)
+
+	// Top-level should have additionalProperties: false
+	assert.Equal(t, false, updated["additionalProperties"])
+
+	// The schema property should also have additionalProperties: false
+	schemaProps := updated["properties"].(map[string]any)["schema"].(map[string]any)
+	assert.Equal(t, false, schemaProps["additionalProperties"])
+
+	// All properties in schema should be required
+	schemaRequired := schemaProps["required"].([]any)
+	assert.Len(t, schemaRequired, 2)
+	assert.Contains(t, schemaRequired, "name")
+	assert.Contains(t, schemaRequired, "age")
+
+	// age was not originally required, so its type should be nullable
+	age := schemaProps["properties"].(map[string]any)["age"].(map[string]any)
+	assert.Equal(t, []string{"number", "null"}, age["type"])
+}
+
 func TestFixSchemaArrayItems(t *testing.T) {
 	schema := `{
   "properties": {
