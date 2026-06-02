@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/docker/go-units"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
@@ -25,6 +26,7 @@ import (
 	"github.com/docker/cagent/pkg/tui/components/editor/completions"
 	"github.com/docker/cagent/pkg/tui/core"
 	"github.com/docker/cagent/pkg/tui/core/layout"
+	"github.com/docker/cagent/pkg/tui/internal/termfeatures"
 	"github.com/docker/cagent/pkg/tui/messages"
 	"github.com/docker/cagent/pkg/tui/styles"
 )
@@ -134,7 +136,7 @@ func New(a *app.App, hist *history.History) Editor {
 		textarea:                      ta,
 		hist:                          hist,
 		completions:                   completions.Completions(a),
-		keyboardEnhancementsSupported: false,
+		keyboardEnhancementsSupported: termfeatures.SupportsModifiedEnter(os.Getenv),
 		banner:                        newAttachmentBanner(),
 	}
 
@@ -547,8 +549,17 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		}
 	case tea.KeyboardEnhancementsMsg:
 		// Track keyboard enhancement support and configure newline keybinding accordingly
-		e.keyboardEnhancementsSupported = msg.Flags != 0
+		e.keyboardEnhancementsSupported = msg.Flags != 0 || termfeatures.SupportsModifiedEnter(os.Getenv)
 		e.configureNewlineKeybinding()
+		return e, nil
+	case uv.ModifyOtherKeysEvent:
+		// Terminal acknowledged modifyOtherKeys — Shift+Enter is now distinguishable
+		// from Enter even on terminals that don't implement the Kitty protocol
+		// (e.g. macOS Terminal.app on Sonoma+).
+		if msg.Mode > 0 && !e.keyboardEnhancementsSupported {
+			e.keyboardEnhancementsSupported = true
+			e.configureNewlineKeybinding()
+		}
 		return e, nil
 	case tea.WindowSizeMsg:
 		e.textarea.SetWidth(msg.Width - 2)
