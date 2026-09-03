@@ -22,6 +22,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/content"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/httpclient"
 	"github.com/docker/docker-agent/pkg/memoize"
 	"github.com/docker/docker-agent/pkg/remote"
 )
@@ -32,9 +33,10 @@ import (
 // binds to 127.0.0.1 over plain HTTP.
 func newURLSourceForTest(rawURL string, envProvider environment.Provider) Source {
 	return &urlSource{
-		url:         rawURL,
-		envProvider: envProvider,
-		unsafe:      true,
+		url:             rawURL,
+		envProvider:     envProvider,
+		unsafe:          true,
+		encryptedConfig: &atomic.Pointer[string]{},
 	}
 }
 
@@ -269,6 +271,43 @@ func TestURLSource_Read(t *testing.T) {
 	data, err := source.Read(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "test content", string(data))
+}
+
+func TestURLSource_CapturesEncryptedConfigHeader(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(httpclient.EncryptedConfigHeader, "ENCRYPTED-BLOB")
+		_, _ = w.Write([]byte("version: \"2\"\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	// httptest binds to 127.0.0.1, which IsTrustedDockerURL treats as trusted,
+	// so the response header is captured.
+	source := newURLSourceForTest(server.URL, nil)
+	_, err := source.Read(t.Context())
+	require.NoError(t, err)
+
+	ecs, ok := source.(EncryptedConfigSource)
+	require.True(t, ok, "urlSource must implement EncryptedConfigSource")
+	assert.Equal(t, "ENCRYPTED-BLOB", ecs.EncryptedConfig())
+}
+
+func TestURLSource_NoEncryptedConfigHeader(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("version: \"2\"\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	source := newURLSourceForTest(server.URL, nil)
+	_, err := source.Read(t.Context())
+	require.NoError(t, err)
+
+	ecs, ok := source.(EncryptedConfigSource)
+	require.True(t, ok)
+	assert.Empty(t, ecs.EncryptedConfig())
 }
 
 func TestURLSource_Read_HTTPError(t *testing.T) {

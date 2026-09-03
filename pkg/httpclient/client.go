@@ -32,6 +32,12 @@ type HTTPOptions struct {
 
 type Opt func(*HTTPOptions)
 
+// EncryptedConfigHeader is the HTTP header that carries the encrypted agent
+// config. docker-agent sends it on requests to a trusted Docker gateway, and a
+// trusted Docker source may return it when the agent YAML is fetched so the
+// value can be replayed on subsequent model requests.
+const EncryptedConfigHeader = "X-Cagent-Encrypted-Config"
+
 func NewHTTPClient(ctx context.Context, opts ...Opt) *http.Client {
 	httpOptions := HTTPOptions{
 		Header:   make(http.Header),

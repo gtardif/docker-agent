@@ -1657,3 +1657,56 @@ func TestLoadWithConfig_WithWorkingDirIsConcurrencySafe(t *testing.T) {
 	assert.Equal(t, callerDir, runConfig.WorkingDir,
 		"the shared RuntimeConfig must never be mutated")
 }
+
+// encConfigSource is a config.Source that also implements
+// config.EncryptedConfigSource, standing in for a trusted Docker URL that
+// returned the X-Cagent-Encrypted-Config response header.
+type encConfigSource struct {
+	name string
+	data []byte
+	enc  string
+}
+
+func (s encConfigSource) Name() string                         { return s.name }
+func (s encConfigSource) ParentDir() string                    { return "" }
+func (s encConfigSource) Read(context.Context) ([]byte, error) { return s.data, nil }
+func (s encConfigSource) EncryptedConfig() string              { return s.enc }
+
+// TestLoadCapturesEncryptedConfigFromSource verifies the loader adopts the
+// encrypted config discovered by the source (e.g. a Docker URL response header)
+// into the load result, so it can be forwarded to the Docker models gateway.
+func TestLoadCapturesEncryptedConfigFromSource(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+	src := encConfigSource{name: "agent.yaml", data: data, enc: "ENCRYPTED-FROM-HEADER"}
+
+	result, err := LoadWithConfig(t.Context(), src, &config.RuntimeConfig{}, withTestProviderRegistry()...)
+	require.NoError(t, err)
+	assert.Equal(t, "ENCRYPTED-FROM-HEADER", result.EncryptedConfig)
+}
+
+// TestLoadExplicitEncryptedConfigWins verifies an explicit
+// --encrypted-config / env value takes precedence over a value the source
+// discovered.
+func TestLoadExplicitEncryptedConfigWins(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+	src := encConfigSource{name: "agent.yaml", data: data, enc: "FROM-HEADER"}
+
+	rc := &config.RuntimeConfig{}
+	rc.EncryptedConfig = "FROM-FLAG"
+
+	result, err := LoadWithConfig(t.Context(), src, rc, withTestProviderRegistry()...)
+	require.NoError(t, err)
+	assert.Equal(t, "FROM-FLAG", result.EncryptedConfig)
+}

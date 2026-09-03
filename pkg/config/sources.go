@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/content"
@@ -29,6 +30,18 @@ type Source interface {
 	Name() string
 	ParentDir() string
 	Read(ctx context.Context) ([]byte, error)
+}
+
+// EncryptedConfigSource is implemented by sources that may discover an
+// encrypted representation of the agent config while reading it (for example a
+// trusted Docker URL that returns the X-Cagent-Encrypted-Config response
+// header). Callers can type-assert a Source to this interface after Read to
+// pick up the value, which is then forwarded to a trusted Docker models gateway
+// on subsequent model requests.
+type EncryptedConfigSource interface {
+	// EncryptedConfig returns the encrypted config captured during the most
+	// recent successful Read, or "" if none was seen. Safe to call concurrently.
+	EncryptedConfig() string
 }
 
 type Sources map[string]Source
@@ -275,15 +288,54 @@ type urlSource struct {
 	// sources_test.go), which exists because tests use httptest.NewServer
 	// (plain HTTP, 127.0.0.1).
 	unsafe bool
+	// encryptedConfig captures the X-Cagent-Encrypted-Config response header
+	// seen on a successful fetch from a trusted Docker URL. It is a pointer so
+	// the value-receiver Read can persist the captured value back onto the
+	// pointer the caller holds, and so concurrent readers see a consistent
+	// value.
+	encryptedConfig *atomic.Pointer[string]
 }
 
 // NewURLSource creates a new URL source. If envProvider is non-nil, it will be used
 // to look up GITHUB_TOKEN for authentication when fetching from GitHub URLs.
 func NewURLSource(rawURL string, envProvider environment.Provider) Source {
 	return &urlSource{
-		url:         rawURL,
-		envProvider: envProvider,
+		url:             rawURL,
+		envProvider:     envProvider,
+		encryptedConfig: &atomic.Pointer[string]{},
 	}
+}
+
+// EncryptedConfig returns the encrypted agent config captured from the
+// X-Cagent-Encrypted-Config response header during the most recent successful
+// Read from a trusted Docker URL, or "" if none was seen. It implements
+// [EncryptedConfigSource].
+func (a urlSource) EncryptedConfig() string {
+	if a.encryptedConfig == nil {
+		return ""
+	}
+	if v := a.encryptedConfig.Load(); v != nil {
+		return *v
+	}
+	return ""
+}
+
+// captureEncryptedConfig records the X-Cagent-Encrypted-Config response header
+// when the fetch targets a trusted Docker URL. The trust check mirrors the
+// Docker JWT injection so the value is never captured from an untrusted host.
+func (a urlSource) captureEncryptedConfig(ctx context.Context, resp *http.Response) {
+	if a.encryptedConfig == nil || resp == nil {
+		return
+	}
+	if !isTrustedDockerURL(a.url) {
+		return
+	}
+	enc := resp.Header.Get(httpclient.EncryptedConfigHeader)
+	if enc == "" {
+		return
+	}
+	a.encryptedConfig.Store(&enc)
+	slog.DebugContext(ctx, "Captured encrypted agent config from Docker source response header", "url", a.url)
 }
 
 func (a urlSource) Name() string {
@@ -356,6 +408,11 @@ func (a urlSource) Read(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("%w: fetching %s: %w", ErrSourceFetchFailed, a.url, err)
 	}
 	defer resp.Body.Close()
+
+	// Capture the encrypted agent config header as early as possible so it is
+	// picked up regardless of which return path (200, 304, or a cached
+	// fallback) the fetch takes.
+	a.captureEncryptedConfig(ctx, resp)
 
 	// 304 Not Modified - return cached content
 	if resp.StatusCode == http.StatusNotModified {

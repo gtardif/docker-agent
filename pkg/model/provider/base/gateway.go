@@ -79,7 +79,7 @@ func GatewayHTTPOptions(gatewayURL *url.URL, defaultBaseURL string, cfg *latest.
 	// Docker JWT injection relies on so we never leak the value to third-party
 	// gateways.
 	if enc := modelOpts.EncryptedConfig(); enc != "" && environment.IsTrustedDockerURL(gatewayURL.String()) {
-		opts = append(opts, httpclient.WithHeader("X-Cagent-Encrypted-Config", enc))
+		opts = append(opts, httpclient.WithHeader(httpclient.EncryptedConfigHeader, enc))
 	}
 	if modelOpts.GeneratingTitle() {
 		opts = append(opts, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))

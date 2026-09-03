@@ -157,7 +157,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 			Models:             loaded.Models,
 			Providers:          loaded.Providers,
 			ModelsGateway:      runConfig.ModelsGateway,
-			EncryptedConfig:    runConfig.EncryptedConfig,
+			EncryptedConfig:    loaded.EncryptedConfig,
 			EnvProvider:        runConfig.EnvProvider(),
 			ProviderRegistry:   loaded.ProviderRegistry,
 			AgentDefaultModels: loaded.AgentDefaultModels,

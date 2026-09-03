@@ -137,6 +137,11 @@ type LoadResult struct {
 	// referenced by several agents is one shared pot.
 	Budgets      map[string]latest.BudgetConfig
 	AgentBudgets map[string][]string
+	// EncryptedConfig is the encrypted agent config in effect for this load:
+	// either the explicit --encrypted-config / env value, or the one captured
+	// from the X-Cagent-Encrypted-Config response header when the agent YAML
+	// was fetched from a trusted Docker URL. Empty when neither applies.
+	EncryptedConfig string
 }
 
 // Load loads an agent team from the given source
@@ -195,6 +200,18 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 	cfg, err := config.Load(ctx, agentSource, config.WithFlavors(runConfig.Flavors...))
 	if err != nil {
 		return nil, err
+	}
+
+	// When the agent YAML was fetched from a trusted Docker URL that returned
+	// the encrypted config in a response header, adopt it so it is forwarded to
+	// the Docker models gateway on model requests. An explicit --encrypted-config
+	// (or its env var) always wins.
+	if runConfig.EncryptedConfig == "" {
+		if ecs, ok := agentSource.(config.EncryptedConfigSource); ok {
+			if enc := ecs.EncryptedConfig(); enc != "" {
+				runConfig.EncryptedConfig = enc
+			}
+		}
 	}
 	if cfg != nil {
 		span.SetAttributes(
@@ -521,6 +538,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		Budget:             cfg.Budget,
 		Budgets:            cfg.Budgets,
 		AgentBudgets:       agentBudgets,
+		EncryptedConfig:    runConfig.EncryptedConfig,
 	}, nil
 }
 
