@@ -25,6 +25,9 @@ const (
 	cagentEnvModelsGateway = "CAGENT_MODELS_GATEWAY"
 	envDefaultModel        = "DOCKER_AGENT_DEFAULT_MODEL"
 	cagentEnvDefaultModel  = "CAGENT_DEFAULT_MODEL"
+
+	flagEncryptedConfig = "encrypted-config"
+	envEncryptedConfig  = "DOCKER_AGENT_ENCRYPTED_CONFIG"
 )
 
 func addRuntimeConfigFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) {
@@ -106,6 +109,10 @@ type userConfigLoader func() (*userconfig.Config, error)
 
 func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig, loadUserConfig userConfigLoader) {
 	cmd.PersistentFlags().StringVar(&runConfig.ModelsGateway, flagModelsGateway, "", "Set the models gateway address")
+	cmd.PersistentFlags().StringVar(&runConfig.EncryptedConfig, flagEncryptedConfig, "",
+		"Encrypted full agent YAML (as produced by `share push --encrypt-key`) forwarded to "+
+			"a trusted Docker models gateway via the X-Cagent-Encrypted-Config header. Ignored "+
+			"for non-Docker gateways and when no gateway is configured.")
 
 	persistentPreRunE := cmd.PersistentPreRunE
 	cmd.PersistentPreRunE = func(_ *cobra.Command, args []string) error {
@@ -147,6 +154,13 @@ func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig, loadUs
 			}
 		}
 		runConfig.ModelsGateway = canonize(runConfig.ModelsGateway)
+
+		// Precedence for the encrypted config: CLI flag > environment variable.
+		if runConfig.EncryptedConfig == "" {
+			if enc, _ := env.Get(ctx, envEncryptedConfig); enc != "" {
+				runConfig.EncryptedConfig = enc
+			}
+		}
 
 		// Precedence for default model: environment variable > user config
 		if model, _ := env.Get(ctx, envDefaultModel); model != "" {

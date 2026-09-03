@@ -1479,6 +1479,7 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 		Models:             loadResult.Models,
 		Providers:          loadResult.Providers,
 		ModelsGateway:      rc.ModelsGateway,
+		EncryptedConfig:    rc.EncryptedConfig,
 		EnvProvider:        rc.EnvProvider(),
 		ProviderRegistry:   loadResult.ProviderRegistry,
 		AgentDefaultModels: loadResult.AgentDefaultModels,

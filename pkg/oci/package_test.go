@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/content"
+	"github.com/docker/docker-agent/pkg/oci/crypto"
 )
 
 func TestPackageFileAsOCIToStore(t *testing.T) {
@@ -54,6 +55,73 @@ agents:
 	assert.Contains(t, metadata.Annotations, "org.opencontainers.image.created")
 	assert.Contains(t, metadata.Annotations, "org.opencontainers.image.description")
 	assert.Equal(t, "OCI artifact containing test.yaml", metadata.Annotations["org.opencontainers.image.description"])
+}
+
+func TestPackageFileAsOCIToStore_EncryptedConfigAnnotation(t *testing.T) {
+	t.Parallel()
+	agentFilename := filepath.Join(t.TempDir(), "test.yaml")
+	testContent := `version: "2"
+agents:
+  root:
+    model: auto
+    description: A helpful AI assistant
+`
+	require.NoError(t, os.WriteFile(agentFilename, []byte(testContent), 0o644))
+	store, err := content.NewStore(content.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+
+	agentSource, err := config.Resolve(agentFilename, nil)
+	require.NoError(t, err)
+
+	const key = "my-shared-secret"
+	tag := "test-encrypted:v1.0.0"
+	digest, err := PackageFileAsOCIToStore(t.Context(), agentSource, tag, store, WithEncryptedConfig(key))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.DeleteArtifact(digest) })
+
+	metadata, err := store.GetArtifactMetadata(tag)
+	require.NoError(t, err)
+	require.NotNil(t, metadata.Annotations)
+	payload, ok := metadata.Annotations[EncryptedConfigAnnotation]
+	require.True(t, ok, "encrypted config annotation must be present")
+	require.NotEmpty(t, payload)
+
+	// A holder of the same key recovers the exact pushed YAML.
+	layer, err := store.GetArtifact(tag)
+	require.NoError(t, err)
+	decrypted, err := crypto.Decrypt(key, payload)
+	require.NoError(t, err)
+	assert.Equal(t, layer, string(decrypted))
+
+	// A wrong key fails (which also proves tamper-detection).
+	_, err = crypto.Decrypt("wrong-key", payload)
+	assert.ErrorIs(t, err, crypto.ErrDecryptionFailed)
+}
+
+func TestPackageFileAsOCIToStore_NoEncryptionByDefault(t *testing.T) {
+	t.Parallel()
+	agentFilename := filepath.Join(t.TempDir(), "test.yaml")
+	testContent := `version: "2"
+agents:
+  root:
+    model: auto
+    description: A helpful AI assistant
+`
+	require.NoError(t, os.WriteFile(agentFilename, []byte(testContent), 0o644))
+	store, err := content.NewStore(content.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+
+	agentSource, err := config.Resolve(agentFilename, nil)
+	require.NoError(t, err)
+
+	tag := "test-noencrypt:v1.0.0"
+	digest, err := PackageFileAsOCIToStore(t.Context(), agentSource, tag, store)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.DeleteArtifact(digest) })
+
+	metadata, err := store.GetArtifactMetadata(tag)
+	require.NoError(t, err)
+	assert.NotContains(t, metadata.Annotations, EncryptedConfigAnnotation)
 }
 
 func TestPackageFileAsOCIToStore_MetadataTagsAnnotation(t *testing.T) {

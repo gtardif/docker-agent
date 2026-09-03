@@ -563,6 +563,7 @@ func getModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentC
 
 		opts := []options.Opt{
 			options.WithGateway(runConfig.ModelsGateway),
+			options.WithEncryptedConfig(runConfig.EncryptedConfig),
 			options.WithStructuredOutput(a.StructuredOutput),
 			options.WithProviders(cfg.Providers),
 		}
@@ -629,6 +630,7 @@ func getFallbackModelsForAgent(ctx context.Context, cfg *latest.Config, a *lates
 
 		opts := []options.Opt{
 			options.WithGateway(runConfig.ModelsGateway),
+			options.WithEncryptedConfig(runConfig.EncryptedConfig),
 			options.WithStructuredOutput(a.StructuredOutput),
 			options.WithProviders(cfg.Providers),
 		}
@@ -695,6 +697,7 @@ func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.Ag
 
 	opts := []options.Opt{
 		options.WithGateway(runConfig.ModelsGateway),
+		options.WithEncryptedConfig(runConfig.EncryptedConfig),
 		options.WithStructuredOutput(a.StructuredOutput),
 		options.WithProviders(cfg.Providers),
 	}
@@ -749,6 +752,7 @@ func getCompactionModelForAgent(ctx context.Context, cfg *latest.Config, a *late
 
 	opts := []options.Opt{
 		options.WithGateway(runConfig.ModelsGateway),
+		options.WithEncryptedConfig(runConfig.EncryptedConfig),
 		options.WithStructuredOutput(a.StructuredOutput),
 		options.WithProviders(cfg.Providers),
 	}

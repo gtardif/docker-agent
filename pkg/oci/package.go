@@ -18,11 +18,41 @@ import (
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/content"
+	"github.com/docker/docker-agent/pkg/oci/crypto"
 	"github.com/docker/docker-agent/pkg/version"
 )
 
+// EncryptedConfigAnnotation is the OCI annotation key under which the full
+// agent YAML is stored, encrypted with a caller-supplied shared key. A holder
+// of the same key can recover the original YAML and is guaranteed (by the
+// authenticated cipher) that it has not been modified.
+const EncryptedConfigAnnotation = "io.docker.agent.config.encrypted"
+
+// packageOptions holds the optional behaviour of PackageFileAsOCIToStore.
+type packageOptions struct {
+	encryptKey string
+}
+
+// PackageOption customizes how an agent file is packaged as an OCI artifact.
+type PackageOption func(*packageOptions)
+
+// WithEncryptedConfig stores the full agent YAML, encrypted with the given
+// shared key, in an OCI annotation. When key is empty the option is a no-op.
+// The encryption is authenticated, so a consumer holding the same key can both
+// decrypt the YAML and verify it has not been tampered with.
+func WithEncryptedConfig(key string) PackageOption {
+	return func(o *packageOptions) {
+		o.encryptKey = key
+	}
+}
+
 // PackageFileAsOCIToStore creates an OCI artifact from a file and stores it in the content store
-func PackageFileAsOCIToStore(ctx context.Context, agentSource config.Source, artifactRef string, store *content.Store) (string, error) {
+func PackageFileAsOCIToStore(ctx context.Context, agentSource config.Source, artifactRef string, store *content.Store, opts ...PackageOption) (string, error) {
+	var options packageOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	if !strings.Contains(artifactRef, ":") {
 		artifactRef += ":latest"
 	}
@@ -78,6 +108,17 @@ func PackageFileAsOCIToStore(ctx context.Context, agentSource config.Source, art
 	}
 	if len(cfg.Metadata.Tags) > 0 {
 		annotations["io.docker.agent.tags"] = strings.Join(cfg.Metadata.Tags, ",")
+	}
+
+	// Optionally embed the full YAML, encrypted with a shared key, as an
+	// annotation. The bytes are exactly what we push as the layer, so a
+	// consumer with the key recovers the same self-contained config.
+	if options.encryptKey != "" {
+		encrypted, err := crypto.Encrypt(options.encryptKey, data)
+		if err != nil {
+			return "", fmt.Errorf("encrypting config: %w", err)
+		}
+		annotations[EncryptedConfigAnnotation] = encrypted
 	}
 
 	layer := static.NewLayer(data, "application/yaml")

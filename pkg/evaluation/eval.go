@@ -695,6 +695,7 @@ func createJudgeModel(ctx context.Context, judgeModel string, runConfig *config.
 	}
 	if runConfig.ModelsGateway != "" {
 		opts = append(opts, options.WithGateway(runConfig.ModelsGateway))
+		opts = append(opts, options.WithEncryptedConfig(runConfig.EncryptedConfig))
 	}
 
 	judge, err := runConfig.ProviderRegistryOrDefault().New(ctx, &cfg, runConfig.EnvProvider(), opts...)

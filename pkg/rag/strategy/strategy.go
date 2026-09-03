@@ -30,8 +30,13 @@ type BuildContext struct {
 // by RuntimeConfig (populated by the team loader with the full provider set);
 // without it, model creation fails with "unknown provider type".
 func (c BuildContext) NewProvider(ctx context.Context, cfg *latest.ModelConfig) (provider.Provider, error) {
+	var encryptedConfig string
+	if c.RuntimeConfig != nil {
+		encryptedConfig = c.RuntimeConfig.EncryptedConfig
+	}
 	return c.RuntimeConfig.ProviderRegistryOrDefault().New(ctx, cfg, c.Env,
 		options.WithGateway(c.ModelsGateway),
+		options.WithEncryptedConfig(encryptedConfig),
 		options.WithProviders(c.Providers))
 }
 
