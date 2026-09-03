@@ -24,6 +24,7 @@ import (
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/httpclient"
 	"github.com/docker/docker-agent/pkg/memoize"
+	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/remote"
 )
 
@@ -274,7 +275,8 @@ func TestURLSource_Read(t *testing.T) {
 }
 
 func TestURLSource_CapturesEncryptedConfigHeader(t *testing.T) {
-	t.Parallel()
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpclient.EncryptedConfigHeader, "ENCRYPTED-BLOB")
@@ -294,7 +296,8 @@ func TestURLSource_CapturesEncryptedConfigHeader(t *testing.T) {
 }
 
 func TestURLSource_NoEncryptedConfigHeader(t *testing.T) {
-	t.Parallel()
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("version: \"2\"\n"))
@@ -308,6 +311,160 @@ func TestURLSource_NoEncryptedConfigHeader(t *testing.T) {
 	ecs, ok := source.(EncryptedConfigSource)
 	require.True(t, ok)
 	assert.Empty(t, ecs.EncryptedConfig())
+}
+
+// digestOf mirrors the server's X-Cagent-Encrypted-Config-Digest format.
+func digestOf(enc string) string {
+	return encryptedConfigDigest(enc)
+}
+
+// TestURLSource_RecoversEncryptedConfigFrom304 verifies that after a 200 that
+// cached the encrypted config, a subsequent 304 (carrying only the digest,
+// not the full blob) recovers the value from disk — so the config survives
+// conditional requests without re-downloading it.
+func TestURLSource_RecoversEncryptedConfigFrom304(t *testing.T) {
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	const enc = "ENCRYPTED-BLOB"
+	const etag = "sha256:abc"
+	const body = "version: \"2\"\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == etag {
+			// 304: only the digest, never the full blob.
+			w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(enc))
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set(httpclient.EncryptedConfigHeader, enc)
+		w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(enc))
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	// First read: 200, caches the config on disk.
+	src1 := newURLSourceForTest(server.URL, nil)
+	_, err := src1.Read(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, enc, src1.(EncryptedConfigSource).EncryptedConfig())
+
+	// Second read from a FRESH source (empty in-memory state): the server
+	// answers 304, and the value must be recovered from disk.
+	src2 := newURLSourceForTest(server.URL, nil)
+	data, err := src2.Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, body, string(data))
+	assert.Equal(t, enc, src2.(EncryptedConfigSource).EncryptedConfig(),
+		"encrypted config must be recovered from cache on a 304")
+}
+
+// TestURLSource_SelfHealsOn304WithoutCachedConfig verifies that when a 304
+// arrives but the cached encrypted config is missing, the client forces a full
+// reload (bypassing the conditional request) to recover the config.
+func TestURLSource_SelfHealsOn304WithoutCachedConfig(t *testing.T) {
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	const enc = "ENCRYPTED-BLOB"
+	const etag = "sha256:abc"
+	const body = "version: \"2\"\n"
+
+	var full, notModified, forced int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A forced reload omits If-None-Match and sends Cache-Control: no-cache.
+		if r.Header.Get("Cache-Control") == "no-cache" {
+			forced++
+			w.Header().Set("ETag", etag)
+			w.Header().Set(httpclient.EncryptedConfigHeader, enc)
+			w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(enc))
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		if r.Header.Get("If-None-Match") == etag {
+			notModified++
+			w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(enc))
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		full++
+		w.Header().Set("ETag", etag)
+		w.Header().Set(httpclient.EncryptedConfigHeader, enc)
+		w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(enc))
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	// Prime the YAML + ETag cache with a 200, then delete only the .enc sidecar
+	// to simulate an older cache that never stored the encrypted config.
+	src1 := newURLSourceForTest(server.URL, nil)
+	_, err := src1.Read(t.Context())
+	require.NoError(t, err)
+	encPath := filepath.Join(getURLCacheDir(), hashURL(server.URL)+".enc")
+	require.NoError(t, os.Remove(encPath))
+
+	// A fresh source now revalidates: server 304s, cache has no config, so the
+	// client self-heals with a forced reload and recovers the config.
+	src2 := newURLSourceForTest(server.URL, nil)
+	data, err := src2.Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, body, string(data))
+	assert.Equal(t, enc, src2.(EncryptedConfigSource).EncryptedConfig(),
+		"self-heal must recover the encrypted config")
+	assert.Equal(t, 1, notModified, "exactly one 304 before self-healing")
+	assert.Equal(t, 1, forced, "exactly one forced reload")
+}
+
+// TestURLSource_SelfHealsOn304DigestMismatch verifies that a stale cached
+// config (whose digest no longer matches the server's) is discarded and the
+// client force-reloads to fetch the current value.
+func TestURLSource_SelfHealsOn304DigestMismatch(t *testing.T) {
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	const staleEnc = "OLD-BLOB"
+	const freshEnc = "NEW-BLOB"
+	const etag = "sha256:abc"
+	const body = "version: \"2\"\n"
+
+	var forced int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cache-Control") == "no-cache" {
+			forced++
+			w.Header().Set("ETag", etag)
+			w.Header().Set(httpclient.EncryptedConfigHeader, freshEnc)
+			w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(freshEnc))
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		if r.Header.Get("If-None-Match") == etag {
+			// 304 advertising the FRESH digest, which won't match the stale cache.
+			w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(freshEnc))
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set(httpclient.EncryptedConfigHeader, staleEnc)
+		w.Header().Set(httpclient.EncryptedConfigDigestHeader, digestOf(staleEnc))
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	// Prime the cache with the stale config.
+	src1 := newURLSourceForTest(server.URL, nil)
+	_, err := src1.Read(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, staleEnc, src1.(EncryptedConfigSource).EncryptedConfig())
+
+	// Fresh source: 304 advertises a different digest, so the stale cache is
+	// rejected and a forced reload fetches the current value.
+	src2 := newURLSourceForTest(server.URL, nil)
+	_, err = src2.Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, freshEnc, src2.(EncryptedConfigSource).EncryptedConfig(),
+		"stale config must be replaced by the forced reload")
+	assert.Equal(t, 1, forced, "digest mismatch must trigger exactly one forced reload")
 }
 
 func TestURLSource_Read_HTTPError(t *testing.T) {

@@ -38,6 +38,14 @@ type Opt func(*HTTPOptions)
 // value can be replayed on subsequent model requests.
 const EncryptedConfigHeader = "X-Cagent-Encrypted-Config"
 
+// EncryptedConfigDigestHeader carries a short SHA-256 fingerprint (hex,
+// "sha256:...") of the encrypted agent config. A trusted Docker source sends it
+// alongside the full config on a 200, and — crucially — alone on a 304 Not
+// Modified response, where the full config is omitted to preserve the bandwidth
+// savings of conditional requests. A client that cached the config from an
+// earlier 200 uses the digest to confirm the cached value is still current.
+const EncryptedConfigDigestHeader = "X-Cagent-Encrypted-Config-Digest"
+
 func NewHTTPClient(ctx context.Context, opts ...Opt) *http.Client {
 	httpOptions := HTTPOptions{
 		Header:   make(http.Header),
